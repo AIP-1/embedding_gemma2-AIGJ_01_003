@@ -6,8 +6,11 @@
 --moving      : 타겟도 매 프레임 추적 (칼만 필터 + 상대 속도 + 충돌 예상 시간 TTC 알람) (10-8)
 사용법: python proximity_app.py --cams 0 2 --target "red fire extinguisher"
         python proximity_app.py --cams 0 2 --target "cart" --moving
+        python proximity_app.py --cams 0 vigi:stream2 --lag 0,0.4 --target-xy 3.0,1.2   (USB + VIGI)
 
-[보드 대응] 카메라가 1대뿐이라 가상 카메라 2대 실험(prox_sim.py)으로 시험한다.
+[보드 대응] 처음엔 카메라가 1대뿐이라 가상 카메라 2대 실험(prox_sim.py)으로 시험했다.
+  지금은 USB 웹캠(C920) + VIGI(RTSP) 2대: 입력은 camio.Source (해상도가 카메라마다 달라도 됨, 보정 해상도와 같아야 함).
+  --lag: 카메라마다 영상이 늦게 도착하는 시간(초). VIGI는 USB보다 늦으므로, 같은 순간의 프레임끼리 삼각측량하도록 맞춘다.
   PROX_OFFLINE=1 이면 카메라·YOLO를 열지 않고, 판정 함수(process_frame, target_apply)만 쓴다.
   원래 process_loop / track_target 안에 있던 코드를 함수로 나눴을 뿐, 계산 내용은 안내문과 같다.
 """
@@ -16,11 +19,15 @@ import cv2, numpy as np, uvicorn
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, StreamingResponse
 import stereo as S
+import camio
 
 OFFLINE = os.environ.get("PROX_OFFLINE") == "1"
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--cams", type=int, nargs=2, default=[0, 1], help="calib_extrinsics.py와 같은 순서")
+ap.add_argument("--cams", nargs="+", default=["0", "1"], help="cam0 cam1 입력 (0 = /dev/video0, vigi:stream2). 보정과 같은 순서")
+ap.add_argument("--lag", default="0,0", help="카메라별 도착 지연(초), 예: 0,0.4")
+ap.add_argument("--focus", type=int, default=0, help="USB 카메라 고정 초점 (보정 때와 같게)")
+ap.add_argument("--host", default="127.0.0.1", help="웹 주소. 사람이 찍히므로 기본은 보드 안에서만")
 ap.add_argument("--mode", choices=["ankle1", "stereo", "fused", "mono"], default="fused",
                 help="mono: [1대 보완] 발목이 보일 때 그 사람의 어깨 높이를 재 두고, 발목이 가려지면 그 높이로 추정")
 ap.add_argument("--target", default=None, help='예: "red fire extinguisher"')
@@ -50,7 +57,8 @@ CLOSE_V = 0.5         # 충돌 위험 알람: 접근 속도(m/s) 기준
 TGT_LOST_S = 2.0      # 이 시간 이상 타겟을 못 보면 EmbeddingGemma로 다시 식별
 
 cams = [S.load_cam(f"calib/cam{n}.npz") for n in range(2 if OFFLINE else NUM_CAMS)]
-ROOM = S.room_bounds(S.load_world("calib/world_points.json"))
+_wj = __import__("json").load(open("calib/world_points.json", encoding="utf-8"))
+ROOM = _wj["room"] if "room" in _wj else S.room_bounds(_wj["points"])     # calib_board.py는 room을 직접 적는다
 if OFFLINE:
     det = None
 else:
@@ -58,24 +66,18 @@ else:
     det = YOLO("yolo11n-pose.pt")
 
 # ---------------- 카메라 수신 (최신 프레임만 보관) ----------------
-class Cam(threading.Thread):
-    def __init__(self, dev):
-        super().__init__(daemon=True)
-        self.cap = cv2.VideoCapture(dev, cv2.CAP_V4L2)
-        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, W); self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, H)
-        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        assert self.cap.isOpened(), f"카메라 {dev}을 열 수 없음 (Q11, Q14 참고)"
-        self.lock, self.frame, self.ts = threading.Lock(), None, 0.0
-    def run(self):
-        while True:
-            ok, f = self.cap.read()
-            if ok:
-                with self.lock:
-                    self.frame, self.ts = f, time.time()
-    def get(self):
-        with self.lock:
-            return self.ts, (None if self.frame is None else self.frame.copy())
+def open_cams():
+    lags = [float(x) for x in args.lag.split(",")] + [0.0] * 2
+    srcs = [camio.Source(d, (W, H), focus=args.focus, lag=lags[n]) for n, d in enumerate(args.cams[:NUM_CAMS])]
+    for n, s in enumerate(srcs):
+        f = camio.wait_frame(s)
+        size = (f.shape[1], f.shape[0])
+        cal = np.load(f"calib/cam{n}.npz")
+        cs = cal["size"] if "size" in cal else cal["res"] if "res" in cal else None
+        if cs is not None and tuple(int(v) for v in cs) != size:
+            raise SystemExit(f"cam{n}: 보정 해상도 {tuple(cs)} ≠ 입력 {size}. 같은 해상도로 보정하세요")
+        print(f"cam{n}: 입력 {s.spec} {size[0]}x{size[1]}, 지연 보정 {s.lag:.2f}s", flush=True)
+    return srcs
 
 # ---------------- 접근·이탈 알람 ----------------
 class ProximityAlarm:
@@ -198,7 +200,10 @@ def load_target_models():
 def embed_crop(emb, f, box, path):
     x1, y1, x2, y2 = box
     cv2.imwrite(path, f[y1:y2, x1:x2])
-    return np.asarray(emb.encode({"image": path}, normalize_embeddings=True), dtype=np.float32)
+    try:
+        return np.asarray(emb.encode({"image": path}, normalize_embeddings=True), dtype=np.float32)
+    finally:
+        os.remove(path)                       # 크롭에 사람이 찍힐 수 있어 바로 지운다
 
 def find_target(frames):
     import torch
@@ -333,7 +338,7 @@ def draw(n, res):
         if now_global - tr.last > 0.3:
             continue
         u, v = S.project_distorted(cams[n], [*tr.xy, tr.h if args.mode != "ankle1" else 0.0])
-        if 0 <= u < W and 0 <= v < H:
+        if 0 <= u < vis.shape[1] and 0 <= v < vis.shape[0]:
             col = (0, 0, 255) if tr.alarm.zone == "near" else (0, 255, 0)
             cv2.circle(vis, (int(u), int(v)), 6, col, -1)
             cv2.putText(vis, f"#{tr.id}", (int(u) + 8, int(v)), cv2.FONT_HERSHEY_SIMPLEX, 0.6, col, 2)
@@ -431,18 +436,22 @@ def process_frame(kps, now, skew):
     return people
 
 def process_loop():
-    srcs = [Cam(d) for d in args.cams[:NUM_CAMS]]
-    for s in srcs:
-        s.start()
-    t0, n_frames, idx = time.time(), 0, 0
+    srcs = open_cams()
+    t0, n_frames, idx, last_ref = time.time(), 0, 0, None
     while True:
-        got = [s.get() for s in srcs]
-        if any(f is None for _, f in got):
+        # 기준 = 찍힌 시각이 가장 이른 카메라의 최신 프레임. 다른 카메라는 그 시각에 가장 가까운 프레임을 고른다
+        lat = [s.latest() for s in srcs]
+        if any(f is None for _, f in lat):
             time.sleep(0.05); continue
+        t_ref = min(t for t, _ in lat)
+        if t_ref == last_ref:
+            time.sleep(0.005); continue
+        last_ref = t_ref
+        got = [s.at(t_ref) for s in srcs]
         frames = [f for _, f in got]
         if retarget.is_set():
             set_target(frames)
-        skew = abs(got[0][0] - got[-1][0])
+        skew = max(t for t, _ in got) - min(t for t, _ in got)
         results = det.predict(frames, conf=0.5, half=True, verbose=False)
         kps = [np.concatenate([r.keypoints.xy.cpu().numpy(), r.keypoints.conf.cpu().numpy()[..., None]], -1)
                if r.keypoints is not None and r.keypoints.conf is not None else np.zeros((0, 17, 3)) for r in results]
@@ -454,6 +463,7 @@ def process_loop():
         n_frames += 1
         if now - t0 >= 1:
             state["stats"] = {"fps": round(n_frames / (now - t0), 1), "skew_ms": round(skew * 1000),
+                              "connected": [s.connected for s in srcs],
                               "mode": args.mode + (" +moving" if args.moving else "")}
             t0, n_frames = now, 0
         for n in range(NUM_CAMS):
@@ -531,4 +541,4 @@ def index():
 
 if __name__ == "__main__":
     threading.Thread(target=process_loop, daemon=True).start()
-    uvicorn.run(app, host="0.0.0.0", port=args.port)
+    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
