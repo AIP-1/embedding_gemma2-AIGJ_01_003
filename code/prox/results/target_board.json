@@ -1,0 +1,62 @@
+{
+ "checkerboard": {
+  "후보_수": [
+   0,
+   0
+  ],
+  "점수": [
+   null,
+   null
+  ],
+  "박스중심_정답과_px": [
+   null,
+   null
+  ],
+  "방식": "찾지 못함"
+ },
+ "black and white checkerboard": {
+  "후보_수": [
+   0,
+   0
+  ],
+  "점수": [
+   null,
+   null
+  ],
+  "박스중심_정답과_px": [
+   null,
+   null
+  ],
+  "방식": "찾지 못함"
+ },
+ "chessboard": {
+  "후보_수": [
+   0,
+   0
+  ],
+  "점수": [
+   null,
+   null
+  ],
+  "박스중심_정답과_px": [
+   null,
+   null
+  ],
+  "방식": "찾지 못함"
+ },
+ "calibration pattern": {
+  "후보_수": [
+   0,
+   0
+  ],
+  "점수": [
+   null,
+   null
+  ],
+  "박스중심_정답과_px": [
+   null,
+   null
+  ],
+  "방식": "찾지 못함"
+ }
+}
