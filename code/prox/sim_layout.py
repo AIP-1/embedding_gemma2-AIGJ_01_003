@@ -1,9 +1,9 @@
 """10-3~10-5, 10-7 실제 배치 계산 + 카메라 배치 비교 (사람 대신 3D 관절 점을 실제 보정 파일로 투영)
 
-- 카메라: 팀원 위치 보정(calib/cam0.npz = VIGI 848x480, cam1.npz = C920 640x480)을 '진짜 카메라'로 쓴다.
+- 카메라: 위치 보정(calib/cam0.npz = VIGI 848x480, cam1.npz = C920 640x480)을 '진짜 카메라'로 쓴다.
 - 사람: 어깨 높이 1.43m(앉으면 1.05m), 발목 0.08m. 관절 화면 좌표에 2px 잡음(안내문 시뮬레이션과 같음).
 - 계산: proximity_app과 같은 stereo.py 함수
-    ankle1 : 발목 → 바닥(z=0) (팀원처럼 C920 1대)
+    ankle1 : 발목 → 바닥(z=0) (실측 때처럼 C920 1대)
     stereo : 두 카메라 어깨 중심 삼각측량
     fused 단독 : 한 카메라(C920) 어깨 → 높이 1.2m 평면 (H_GUESS)
 - 책상: 사람 앞(카메라 쪽) 0.45m, 높이 0.74m. 발목이 가려지면 ankle1은 책상 다리(책상 앞쪽 바닥)를 발목으로 잡는다.
@@ -89,7 +89,7 @@ for name, xy, sit, desk in tests:
     table.append({"name": name, "xy": np.round(xy, 2).tolist(), "d_true": round(d, 2), **out})
     print(name, json.dumps(out, ensure_ascii=False))
 
-# 팀원 실측 자리 (카메라에서 약 2.6m, 단상 0.4m): stereo 오차 범위
+# 실측 자리 (카메라에서 약 2.6m, 단상 0.4m): stereo 오차 범위
 C = (cams[0]["C"] + cams[1]["C"]) / 2
 dirx = np.array([1.0, 0.0])
 spot = C[:2] + 2.6 * dirx
@@ -102,7 +102,7 @@ team_spot = {"카메라에서_m": 2.6, "어깨_높이_m": round(float(sh[2]), 2)
              "stereo_위치오차_중앙값_cm": round(100 * float(np.median(errs)), 1),
              "stereo_위치오차_90%_cm": round(100 * float(np.percentile(errs, 90)), 1),
              "stereo_높이_중앙값_m": round(float(np.median(hs)), 2), "높이_90%_범위_m": [round(float(np.percentile(hs, 5)), 2), round(float(np.percentile(hs, 95)), 2)]}
-print("팀원 자리", team_spot)
+print("실측 자리", team_spot)
 
 
 # ---------------- 2) 카메라 배치 비교 (stereo, 서 있는 사람) ----------------
@@ -136,6 +136,6 @@ for lname, cs in layouts.items():
 
 json.dump({"조건": {"관절오차_px": NOISE, "반복": N, "어깨_섬/앉음_m": [SH_STAND, SH_SIT], "타겟": TARGET.tolist(),
                   "ankle1·fused 카메라": "cam1 C920"},
-           "실제배치_10-7": table, "팀원_실측_자리": team_spot, "배치_비교": compare},
+           "실제배치_10-7": table, "실측_자리": team_spot, "배치_비교": compare},
           open("results/sim_layout.json", "w"), ensure_ascii=False, indent=1)
 print("saved results/sim_layout.json")

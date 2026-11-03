@@ -4,7 +4,7 @@ CAL = "/home/team2-1/eg2-lab/prox/calib/"
 obj = B.board_points(9, 6, 0.024)
 v = np.load(CAL + "cam0_intr.npz"); c_fix = np.load(CAL + "cam1_intr.npz"); c_free = np.load(CAL + "cam1_intr_free.npz")
 saved = [S.load_cam(CAL + f"cam{n}.npz") for n in (0, 1)]
-print("팀원 저장 위치 C0", saved[0]["C"].round(3), "C1", saved[1]["C"].round(3),
+print("저장된 위치 C0", saved[0]["C"].round(3), "C1", saved[1]["C"].round(3),
       "간격", round(float(np.linalg.norm(saved[0]["C"] - saved[1]["C"])), 3))
 
 def mk(R, t, K, D):
@@ -24,7 +24,7 @@ def run(name, K1, D1, z):
           f" | 삼각측량 재투영 {rerr.mean():.2f}px | 칸 {1000*sp.mean():.2f}±{1000*sp.std():.2f}mm (실제 24) | 보드 중심 {X.mean(0).round(3)}")
     return cams
 
-A = run("팀원 값 (C920 고정 680.6)", c_fix["K"], c_fix["dist"], 1.0)
+A = run("고정 값 (C920 고정 680.6)", c_fix["K"], c_fix["dist"], 1.0)
 Bc = run("C920 자유 값 (669.9)", c_free["K"], c_free["dist"], 1.0)
 # 같은 화면 좌표를 두 보정으로 삼각측량했을 때 사람 위치가 얼마나 달라지나: A로 투영한 가상 어깨점 → B로 역산
 print("사람(어깨 1.4m) 위치 차이 — 같은 화면 좌표를 두 보정으로 계산했을 때")

@@ -1,4 +1,4 @@
-"""팀원 proximity_app의 /state를 읽기만 해서 기록 (영상은 받지 않음)
+"""실행 중인 proximity_app의 /state를 읽기만 해서 기록 (영상은 받지 않음)
 python state_logger.py <포트> <출력.jsonl> [최대 초]
 - 0.5초마다 stats·people·target을, 새 이벤트는 한 번씩 기록
 - 실행 중인 proximity_app 명령줄(모드·옵션)이 바뀌면 기록
